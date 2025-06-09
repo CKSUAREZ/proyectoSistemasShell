@@ -11,7 +11,7 @@
 //*****************************************************************
 // CONSTANTES
 //*****************************************************************
-#define MAX_ENTRADA 256    // Longitud máxima para entrada de usuario
+#define MAX_ENTRADA 200    // Longitud máxima para entrada de usuario
 #define MAX_ARGUMENTOS 20  // Número máximo de argumentos por comando
 
 //*****************************************************************

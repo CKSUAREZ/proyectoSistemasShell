@@ -164,7 +164,7 @@ void mostrar_prompt() {
     // Obtener directorio actual y mostrar prompt con color
     if (getcwd(directorio_actual, sizeof(directorio_actual))) {
         // \033[1;34m = Azul brillante, \033[0m = Resetear color
-        printf("\033[1;34m%s@minishell:%s\033[0m$ ", usuario, directorio_actual);
+        printf("\033[1;32m%s@minishell:%s\033[0m$ ", usuario, directorio_actual);
     } else {
         perror("getcwd");  // Mostrar error si falla
     }

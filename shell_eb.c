@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <errno.h>
+#include <glob.h>
 
 //*****************************************************************
 // CONSTANTES
@@ -142,9 +143,7 @@ int main() {
         }
         
         // Comandos externos con posible redirección
-        if (!manejar_redirecciones(argumentos)) {
-            ejecutar_comando(argumentos);
-        }
+        ejecutar_comando(argumentos);  // redirección ahora ocurre en el hijo
     }
     
     return 0;
@@ -174,46 +173,48 @@ void mostrar_prompt() {
 // Función: interpretar_entrada
 //*****************************************************************
 int interpretar_entrada(char *entrada, char **args) {
-    // Buscar si hay pipes en el comando
     char *pipe_pos = strchr(entrada, '|');
     if (pipe_pos != NULL) {
-        char *comandos[MAX_ARGUMENTOS];  // Array para comandos separados
+        char *comandos[MAX_ARGUMENTOS];
         int num_comandos = 0;
-        
-        // Dividir la entrada por pipes
         char *token = strtok(entrada, "|");
         while (token != NULL && num_comandos < MAX_ARGUMENTOS) {
             comandos[num_comandos++] = token;
             token = strtok(NULL, "|");
         }
-        
-        // Procesar cada comando individual
+
         char *args_comandos[MAX_ARGUMENTOS][MAX_ARGUMENTOS];
         for (int i = 0; i < num_comandos; i++) {
-            // Dividir cada comando en argumentos
             char *arg_token = strtok(comandos[i], " ");
             int j = 0;
             while (arg_token != NULL && j < MAX_ARGUMENTOS - 1) {
                 args_comandos[i][j++] = arg_token;
                 arg_token = strtok(NULL, " ");
             }
-            args_comandos[i][j] = NULL;  // Terminar con NULL
+            args_comandos[i][j] = NULL;
         }
-        
-        // Ejecutar la secuencia de pipes
+
         ejecutar_con_pipes(args_comandos, num_comandos);
         return 0;
     }
-    
-    // Comando simple (sin pipes)
+
     int i = 0;
     char *token = strtok(entrada, " ");
     while (token != NULL && i < MAX_ARGUMENTOS - 1) {
-        args[i++] = token;
+        if (strchr(token, '*') || strchr(token, '?')) {
+            glob_t glob_result;
+            if (glob(token, GLOB_NOCHECK, NULL, &glob_result) == 0) {
+                for (size_t j = 0; j < glob_result.gl_pathc && i < MAX_ARGUMENTOS - 1; j++) {
+                    args[i++] = strdup(glob_result.gl_pathv[j]);
+                }
+                globfree(&glob_result);
+            }
+        } else {
+            args[i++] = token;
+        }
         token = strtok(NULL, " ");
     }
-    args[i] = NULL;  // Terminar con NULL
-    
+    args[i] = NULL;
     return 1;
 }
 
@@ -315,14 +316,71 @@ int manejar_redirecciones(char **args) {
 //*****************************************************************
 void ejecutar_comando(char **args) {
     pid_t pid = fork();
-    
+
     if (pid == 0) {
-        // Proceso hijo
+        // Proceso hijo: Manejar redirecciones aquí
+        int i = 0, fd;
+        while (args[i] != NULL) {
+            if (strcmp(args[i], ">") == 0) {
+                fd = open(args[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd == -1) { perror("open >"); exit(1); }
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+                args[i] = NULL;
+                break;
+            } else if (strcmp(args[i], ">>") == 0) {
+                fd = open(args[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0644);
+                if (fd == -1) { perror("open >>"); exit(1); }
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+                args[i] = NULL;
+                break;
+            } else if (strcmp(args[i], "<") == 0) {
+                fd = open(args[i + 1], O_RDONLY);
+                if (fd == -1) { perror("open <"); exit(1); }
+                dup2(fd, STDIN_FILENO);
+                close(fd);
+                args[i] = NULL;
+                break;
+            } else if (strcmp(args[i], "<<") == 0) {
+                // HERE-DOCUMENT
+                if (args[i + 1] == NULL) {
+                    fprintf(stderr, "Falta delimitador para <<\n");
+                    exit(1);
+                }
+                char *delimitador = args[i + 1];
+                char tempname[] = "/tmp/tmpheredocXXXXXX";
+                int tempfd = mkstemp(tempname);
+                if (tempfd == -1) {
+                    perror("mkstemp");
+                    exit(1);
+                }
+
+                char linea[MAX_ENTRADA];
+                printf("heredoc> ");
+                while (fgets(linea, sizeof(linea), stdin)) {
+                    // Quitar salto de línea
+                    linea[strcspn(linea, "\n")] = 0;
+                    if (strcmp(linea, delimitador) == 0) break;
+                    dprintf(tempfd, "%s\n", linea);
+                    printf("heredoc> ");
+                }
+
+                lseek(tempfd, 0, SEEK_SET);
+                dup2(tempfd, STDIN_FILENO);
+                close(tempfd);
+                unlink(tempname);  // eliminar archivo temporal
+                args[i] = NULL;
+                break;
+            }
+            i++;
+        }
+
+        // Ejecutar el comando (redirigido si aplica)
         execvp(args[0], args);
         perror("Error al ejecutar comando");
         exit(1);
     } else if (pid > 0) {
-        // Proceso padre espera al hijo
         wait(NULL);
     } else {
         perror("Error al crear proceso");
